@@ -6,11 +6,12 @@ circle with a color that encodes I/sigma(I) = intensity.sum.value / sqrt(intensi
   azimuth = angle of s1 projected onto the plane perpendicular to the beam
 
 All spots are plotted (I/sigma does not depend on dbi_lambda) unless --only-dbi is given.
-The color scale runs from min(I/sigma) to the --upper-percentile value; brighter spots
-saturate at the top color.
+Spots with I/sigma at or below --sigma (default 1.0) are drawn as open white circles with
+thin 50% grey borders. Spots above it are colored on a scale that runs from --sigma to the
+--upper-percentile value; brighter spots saturate at the top color.
 
 Usage (after sourcing a cctbx/DIALS setpaths script):
-  libtbx.python plot_spots_isigma.py file.expt file.refl [-o out.png] [--only-dbi]
+  libtbx.python plot_spots_isigma.py file.expt file.refl [-o out.png] [--sigma 1.0] [--only-dbi]
 """
 import argparse
 
@@ -33,6 +34,8 @@ def main():
     parser.add_argument("-o", "--output", default="spots_isigma.png")
     parser.add_argument("--only-dbi", action="store_true",
                         help="plot only spots whose dbi_lambda is not NaN")
+    parser.add_argument("--sigma", type=float, default=1.0,
+                        help="lowest colored I/sigma; weaker spots are open white circles")
     parser.add_argument("--upper-percentile", type=float, default=99.0,
                         help="I/sigma percentile mapped to the top of the color scale")
     parser.add_argument("--cmap", default="viridis")
@@ -54,14 +57,24 @@ def main():
     if args.only_dbi:
         keep &= ~np.isnan(lam)
 
-    vmin = isig[keep].min()
+    weak = keep & (isig <= args.sigma)
+    strong = keep & (isig > args.sigma)
+    vmin = args.sigma
     vmax = np.percentile(isig[keep], args.upper_percentile)
+    if vmax <= vmin:
+        vmax = isig[strong].max() if strong.any() else vmin + 1.0
 
     fig, ax = plt.subplots(figsize=(9.5, 8), subplot_kw={"projection": "polar"})
-    order = np.argsort(isig[keep])  # strongest spots drawn on top
-    sc = ax.scatter(azimuth[keep][order], two_theta[keep][order], c=isig[keep][order],
-                    cmap=args.cmap, vmin=vmin, vmax=vmax, s=14,
-                    edgecolors="black", linewidths=0.25)
+    # Weak spots first, as open white circles, so colored spots sit on top
+    ax.scatter(azimuth[weak], two_theta[weak], s=14, facecolors="white",
+               edgecolors="0.5", linewidths=0.25,  # 50% grey border
+               label="I/\u03c3 \u2264 %g (%d)" % (args.sigma, weak.sum()))
+    order = np.argsort(isig[strong])  # strongest spots drawn on top
+    sc = ax.scatter(azimuth[strong][order], two_theta[strong][order],
+                    c=isig[strong][order], cmap=args.cmap, vmin=vmin, vmax=vmax, s=14,
+                    edgecolors="black", linewidths=0.25,
+                    label="I/\u03c3 > %g (%d)" % (args.sigma, strong.sum()))
+    ax.legend(loc="upper left", bbox_to_anchor=(-0.12, 1.08), fontsize=8)
     ax.set_rmin(0)
     ax.set_rlabel_position(135)
     ax.set_title("Bragg spots from s1: radius = 2θ (deg), angle = azimuth\n%s"
@@ -76,6 +89,8 @@ def main():
     print("Plotted %d spots (%s)" % (keep.sum(), "dbi_lambda only" if args.only_dbi else "all"))
     print("I/sigma: min %.2f  median %.2f  mean %.2f  max %.2f; color scale top (%.0fth pct) = %.2f"
           % (v.min(), np.median(v), v.mean(), v.max(), args.upper_percentile, vmax))
+    print("Colored (I/sigma > %g): %d; open white (<= %g): %d"
+          % (args.sigma, strong.sum(), args.sigma, weak.sum()))
     print("Spots with I/sigma > 3: %d (%.1f%%)" % ((v > 3).sum(), 100.0 * (v > 3).mean()))
     print("-> %s" % args.output)
 
